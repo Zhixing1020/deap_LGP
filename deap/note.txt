@@ -15,3 +15,11 @@ cloneReplacing()  --> change to clone()
 parentType in GPNode
 GPNodeconstraint    -->   node constraints are fulfilled by checking the number of children
 
+
+********  test  ********
+1. randomly produce individuals
+2. clone a tree and vary it. check the new and original one
+3. check the toString() methods of GPNode and GPTree
+4. number of nodes and collect a node based on specific types
+5. node equivalent and tree equivalent
+

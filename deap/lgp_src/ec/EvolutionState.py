@@ -46,8 +46,9 @@ class EvolutionState:
         self.breeder = None  # Breeder instance
         self.statistics = None  # Statistics instance
 
-    def setup(self, parameters):
-        self.parameters = parameters
+    def setup(self, base:str):
+
+        p = Parameter(base)
 
         # self.data = [{} for _ in self.random]  # per-thread data
 
@@ -75,13 +76,13 @@ class EvolutionState:
         #     if not self.checkpointDirectory.is_dir():
         #         self.fatal("The checkpoint directory is not a directory.")
 
-        if parameters.exists(self.P_EVALUATIONS):
-            self.numEvaluations = parameters.getInt(self.P_EVALUATIONS, None)
+        if self.parameters.exists(self.P_EVALUATIONS):
+            self.numEvaluations = self.parameters.getInt(self.P_EVALUATIONS, None)
             if self.numEvaluations <= 0:
                 self.output.fatal("Evaluations must be >= 1 if defined.")
 
-        if parameters.exists(self.P_GENERATIONS):
-            self.numGenerations = parameters.getInt(self.P_GENERATIONS, None)
+        if self.parameters.exists(self.P_GENERATIONS):
+            self.numGenerations = self.parameters.getInt(self.P_GENERATIONS, None)
             if self.numGenerations <= 0:
                 self.fatal("Generations must be >= 1 if defined.")
             if self.numEvaluations != self.__class__.UNDEFINED:
@@ -90,40 +91,116 @@ class EvolutionState:
         elif self.numEvaluations == self.__class__.UNDEFINED:
             self.fatal("Either evaluations or generations must be defined.")
 
-        if parameters.exists(self.P_NODEEVALUATIONS):
-            self.numNodeEva = parameters.getDouble(self.P_NODEEVALUATIONS, None)
+        if self.parameters.exists(self.P_NODEEVALUATIONS):
+            self.numNodeEva = self.parameters.getDouble(self.P_NODEEVALUATIONS, None)
             if self.numNodeEva <= 0:
                 self.fatal("Node evaluations must be >= 1 if defined.")
 
         # self.quitOnRunComplete = parameters.getBoolean("quit-on-run-complete", False)
 
-        self.initializer = parameters.getInstanceForParameter(self.P_INITIALIZER, None, Initializer)
+        self.initializer = self.parameters.getInstanceForParameter(self.P_INITIALIZER, None, Initializer)
         self.initializer.setup(self, self.P_INITIALIZER)
 
-        self.finisher = parameters.getInstanceForParameter(self.P_FINISHER, None, Finisher)
+        self.finisher = self.parameters.getInstanceForParameter(self.P_FINISHER, None, Finisher)
         self.finisher.setup(self, self.P_FINISHER)
 
-        self.breeder = parameters.getInstanceForParameter(self.P_BREEDER, None, Breeder)
+        self.breeder = self.parameters.getInstanceForParameter(self.P_BREEDER, None, Breeder)
         self.breeder.setup(self, self.P_BREEDER)
 
-        self.evaluator = parameters.getInstanceForParameter(self.P_EVALUATOR, None, Evaluator)
+        self.evaluator = self.parameters.getInstanceForParameter(self.P_EVALUATOR, None, Evaluator)
         self.evaluator.setup(self, self.P_EVALUATOR)
 
-        self.statistics = parameters.getInstanceForParameterEq(self.P_STATISTICS, None, Statistics)
+        self.statistics = self.parameters.getInstanceForParameterEq(self.P_STATISTICS, None, Statistics)
         self.statistics.setup(self, self.P_STATISTICS)
 
-        self.exchanger = parameters.getInstanceForParameter(self.P_EXCHANGER, None, Exchanger)
+        self.exchanger = self.parameters.getInstanceForParameter(self.P_EXCHANGER, None, Exchanger)
         self.exchanger.setup(self, self.P_EXCHANGER)
 
         self.generation = 0
 
     def finish(self, result: int):
-        pass
+        self.statistics.finalStatistics(self, result)
+        self.finisher.finishPopulation(self, result)
+        # self.exchanger.closeContacts(self, result)
+        self.evaluator.closeContacts(self, result)
 
     def startFresh(self):
-        pass
+        self.output.message("Setting up")
+        self.setup(self, None)  # garbage Parameter equivalent
 
-    def evolve(self) -> int:
+        # POPULATION INITIALIZATION
+        self.output.message("Initializing Generation 0")
+        self.statistics.preInitializationStatistics(self)
+        self.population = self.initializer.initialPopulation(self, 0)
+        self.statistics.postInitializationStatistics(self)
+
+        # Compute generations from evaluations if necessary
+        if self.numEvaluations > self.UNDEFINED:
+            generationSize = sum(
+                len(subpop.individuals) for subpop in self.population.subpops
+            )
+
+            if self.numEvaluations < generationSize:
+                self.numEvaluations = generationSize
+                self.numGenerations = 1
+                self.output.warning(f"Using evaluations, but evaluations is less than the initial total population size ({generationSize}).  Setting to the population size.")
+            else:
+                if self.numEvaluations % generationSize != 0:
+                    new_evals = (self.numEvaluations // generationSize) * generationSize
+                    self.output.warning(f"Using evaluations, but initial total population size does not divide evenly into it.  Modifying evaluations to a smaller value ({new_evals}) which divides evenly.")
+                self.numGenerations = self.numEvaluations // generationSize
+                self.numEvaluations = self.numGenerations * generationSize
+
+            self.output.message(f"Generations will be {self.numGenerations}")
+
+        # self.exchanger.initializeContacts(self)
+        self.evaluator.initializeContacts(self)
+
+    def evolve(self):
+        if self.generation > 0:
+            self.output.message(f"Generation {self.generation}")
+
+        # EVALUATION
+        self.statistics.preEvaluationStatistics(self)
+        self.evaluator.evaluatePopulation(self)
+        self.statistics.postEvaluationStatistics(self)
+
+        # SHOULD WE QUIT?
+        if self.evaluator.runComplete(self) and self.quitOnRunComplete:
+            self.output.message("Found Ideal Individual")
+            return self.R_SUCCESS
+
+        if self.generation == self.numGenerations - 1:
+            return self.R_FAILURE
+
+        # PRE-BREEDING EXCHANGING
+        # self.statistics.prePreBreedingExchangeStatistics(self)
+        # self.population = self.exchanger.preBreedingExchangePopulation(self)
+        # self.statistics.postPreBreedingExchangeStatistics(self)
+
+        # exchanger_msg = self.exchanger.runComplete(self)
+        # if exchanger_msg is not None:
+        #     self.output.message(exchanger_msg)
+        #     return self.R_SUCCESS
+
+        # BREEDING
+        self.statistics.preBreedingStatistics(self)
+        self.population = self.breeder.breedPopulation(self)
+        self.statistics.postBreedingStatistics(self)
+
+        # POST-BREEDING EXCHANGING
+        # self.statistics.prePostBreedingExchangeStatistics(self)
+        # self.population = self.exchanger.postBreedingExchangePopulation(self)
+        # self.statistics.postPostBreedingExchangeStatistics(self)
+
+        # INCREMENT GENERATION AND CHECKPOINT
+        self.generation += 1
+        # if self.checkpoint and self.generation % self.checkpointModulo == 0:
+        #     self.output.message("Checkpointing")
+        #     self.statistics.preCheckpointStatistics(self)
+        #     Checkpoint.setCheckpoint(self)
+        #     self.statistics.postCheckpointStatistics(self)
+
         return self.R_NOTDONE
 
     def run(self, condition: int):
