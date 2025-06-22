@@ -12,8 +12,14 @@ GPNodeGatherer   -->  only for a memory address to store GPNode in a function
 cloneReplacing()  --> change to clone()
 
 ********   disgard *********
-parentType in GPNode
+
 GPNodeconstraint    -->   node constraints are fulfilled by checking the number of children
+
+no species
+
+no Exchanger
+
+no hash code
 
 
 ********  test  ********
